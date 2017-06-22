@@ -1,0 +1,93 @@
+pragma solidity ^0.4.8;
+
+contract PredictionMarket {
+
+    uint numberOfQuestions;
+    mapping (address => uint) earnings;
+    mapping (uint => questions) allQuestions;
+    
+    enum State {predicting, checkingForWinners, withdrawing }
+    
+    modifier checkState (uint questionID, State state) {
+        require(allQuestions[questionID].currentState == state);
+        _;
+    }
+    
+    event changeState(uint questionID, State state);
+
+    struct questions {
+        address charity;
+        uint sum;
+        uint numberOfGuesses;
+        uint timeLimit;
+        uint bottomEndOfRange;
+        uint topEndOfRange;
+        uint numberOfWinners;
+        uint moveToWithdrawState;
+        uint payout;
+        State currentState;
+        mapping (address => bool) won;
+        mapping (address => bool) voted;
+        mapping (address => uint) predictions;
+    }
+    
+    function createQuestion (uint _timeLimit, address _charity) returns (uint) {
+        numberOfQuestions ++;
+        allQuestions[numberOfQuestions].timeLimit = now + _timeLimit;
+        allQuestions[numberOfQuestions].charity = _charity;
+        allQuestions[numberOfQuestions].currentState = State.predicting;
+        changeState(numberOfQuestions, State.predicting);
+        return(numberOfQuestions);
+        
+    }
+    
+    function makePrediction (uint questionID, uint _guess) 
+            checkState (questionID, State.predicting)payable {
+        require (msg.value == 1);
+        require (now < allQuestions[questionID].timeLimit);
+        require (allQuestions[questionID].voted[msg.sender] == false);
+        allQuestions[questionID].predictions[msg.sender] = _guess;
+        allQuestions[questionID].numberOfGuesses += 1;
+        allQuestions[questionID].sum += _guess;
+    }
+    
+    function closeQuestion (uint questionID) checkState (questionID, State.predicting) {
+        uint average = allQuestions[questionID].sum / allQuestions[questionID].numberOfGuesses;
+        allQuestions[questionID].topEndOfRange = average + ((10 * average) / 100);
+        allQuestions[questionID].bottomEndOfRange = average - ((10 * average) / 100);
+        allQuestions[questionID].currentState = State.checkingForWinners;
+        allQuestions[questionID].moveToWithdrawState = now + 1 weeks;
+        changeState(questionID, State.checkingForWinners);
+    }
+        
+    function checkIfWon (uint questionID) checkState (questionID, State.checkingForWinners) returns (bool) {
+        require(now > allQuestions[questionID].timeLimit);
+        require(allQuestions[questionID].voted[msg.sender] == true);
+        bool condition1 = allQuestions[questionID].predictions[msg.sender] >= 
+            allQuestions[questionID].bottomEndOfRange;
+        bool condition2 = allQuestions[questionID].predictions[msg.sender] < 
+            allQuestions[questionID].topEndOfRange;
+        if (condition1 && condition2) {
+            allQuestions[questionID].won[msg.sender] = true;
+            allQuestions[questionID].numberOfWinners += 1;
+        }
+    }
+    
+    function changeStateToWithdraw (uint questionID) checkState (questionID, State.checkingForWinners) {
+        require (now > allQuestions[questionID].moveToWithdrawState);
+        allQuestions[questionID].payout = allQuestions[questionID].numberOfGuesses /
+            allQuestions[questionID].numberOfWinners;
+        uint totalMoneyPaid = allQuestions[questionID].payout * allQuestions[questionID].numberOfWinners;
+        uint moneyForCharity = allQuestions[questionID].numberOfGuesses - totalMoneyPaid;
+        earnings[allQuestions[questionID].charity] += moneyForCharity;
+        allQuestions[questionID].currentState = State.withdrawing;
+        changeState(questionID, State.withdrawing);
+    }
+        
+    function withdrawEarnings () {
+        require(earnings[msg.sender] > 0);
+        uint amount = earnings[msg.sender];
+        delete earnings[msg.sender];
+        msg.sender.send(amount);
+    }
+}
